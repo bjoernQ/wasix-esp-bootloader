@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.wasmer-cache/
+.tools/
+toolchain/out/
+__pycache__/
+*.pyc
+web/public/examples/*/build/
+web/public/toolchain/bin/

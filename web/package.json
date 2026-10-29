@@ -1,0 +1,18 @@
+{
+  "name": "esp-wasix",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "wasix": "node wasix-build.mjs"
+  },
+  "dependencies": {
+    "@wasmer/sdk": "^0.19.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
