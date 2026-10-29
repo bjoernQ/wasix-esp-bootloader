@@ -37,6 +37,41 @@ From this repo in the same Ubuntu machine:
 python3 toolchain/build-real-bootloader.py --chip esp32c6 --mode dio --freq 40m --size 4MB --log info --baud 115200 --rollback 0 --sha256 1 --reset-gpio -1 --partition 0x8000
 ```
 
+## Update the bootloader to a specific IDF release
+
+The page builds whatever tree is checked out at `/opt/esp-idf`. `toolchain/build-real-bootloader.py` also forces `ESP_IDF_VERSION` to `6.2.0` and reuses `/opt/idf-targets/<chip>`, so a new release needs the checkout, the Python packages, that version string, and the old chip projects updated together. Run these as root in Ubuntu. Replace `v5.4.2` with the release tag you want (`v5.4.2`, `v5.5.1`, `v6.1`, and so on).
+
+```bash
+cd /opt/esp-idf
+git fetch origin tag v5.4.2 --depth 1
+git checkout v5.4.2
+git submodule update --init --recursive
+```
+
+Install the Python packages for that minor version. The constraints file name is `v<major>.<minor>`, so `v5.4.2` uses `espidf.constraints.v5.4.txt`.
+
+```bash
+curl -fsSL -o /root/.espressif/espidf.constraints.v5.4.txt \
+  https://dl.espressif.com/dl/esp-idf/espidf.constraints.v5.4.txt
+rm -rf /opt/idf-venv
+python3 -m venv /opt/idf-venv
+/opt/idf-venv/bin/python -m pip install \
+  -r /opt/esp-idf/tools/requirements/requirements.core.txt \
+  -c /root/.espressif/espidf.constraints.v5.4.txt
+```
+
+In `toolchain/build-real-bootloader.py`, set `ESP_IDF_VERSION` to the release number without the leading `v` (`5.4.2` for tag `v5.4.2`). The script passes that value into `idf.py`. It has to match the constraints file above.
+
+Drop the old per-chip projects. The next Build copies `examples/get-started/hello_world` from the new tree and runs `idf.py set-target` again.
+
+```bash
+rm -rf /opt/idf-targets
+```
+
+The script looks for `riscv32-esp-elf-gcc` and `xtensa-esp-elf-gcc` in `/opt/esp-clang/sysroots/riscv32-esp-elf/bin` and `/opt/esp-clang/sysroots/xtensa-esp-elf/bin`. The versions that release expects are listed in `/opt/esp-idf/tools/tools.json` under `riscv32-esp-elf` and `xtensa-esp-elf`. If `idf.py` reports a toolchain mismatch, install those versions and put their `bin` directories on those two paths.
+
+Chips that release does not contain still appear on the page. Build fails for those at `set-target`. The list is `CHIPS` in `toolchain/build-real-bootloader.py` and `web/public/toolchain/bootloader/chips.json`.
+
 ## What stays out of git
 
 `web/node_modules`, `web/dist`, and `.wasmer-cache` are installed or downloaded locally.
