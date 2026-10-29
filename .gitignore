@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wasmer-cache/
+toolchain/out/
+web/public/toolchain/bin/
+*.partial
+*-bootloader.bin

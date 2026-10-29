@@ -1,0 +1,172 @@
+:root {
+  color: white;
+  background: rgb(53, 53, 53);
+  font-family: "Fira Sans", sans-serif;
+  line-height: 1.45;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button, select, input {
+  font: inherit;
+  color: inherit;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px 24px;
+}
+
+.content {
+  width: 900px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 64px);
+}
+
+header {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+header img {
+  width: 100px;
+  height: auto;
+  margin-bottom: 12px;
+}
+
+header h1 {
+  margin: 0.5rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 500;
+}
+
+header p {
+  margin: 0.35rem 0 0;
+  color: #c0c0c0;
+}
+
+h2 {
+  margin: 2.5rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 500;
+}
+
+.fields label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px;
+  border-bottom: 2px solid #454444;
+}
+
+.fields label[hidden] {
+  display: none;
+}
+
+.fields label span {
+  width: 160px;
+  flex: none;
+  color: #d6991d;
+}
+
+select,
+input[type="number"],
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid #454444;
+  border-radius: 0;
+  padding: 6px 0;
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-bottom-color: #d6991d;
+}
+
+select option {
+  color: black;
+  background: white;
+}
+
+input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: #d6991d;
+}
+
+.notes {
+  margin-top: 14px;
+  color: #c0c0c0;
+}
+
+.notes p {
+  margin: 0.7rem 0 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 1.5rem;
+}
+
+button {
+  cursor: pointer;
+  background: transparent;
+  color: #d6991d;
+  border: 2px solid #454444;
+  border-radius: 0;
+  padding: 8px 16px;
+}
+
+button.primary {
+  background: #d6991d;
+  color: rgb(53, 53, 53);
+  border-color: #d6991d;
+  font-weight: 500;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+#log {
+  flex: 1;
+  min-height: 240px;
+  margin: 0.75rem 0 0;
+  padding: 12px;
+  overflow: auto;
+  background: #2e2e2e;
+  border: 2px solid #454444;
+  color: #c0c0c0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .fields label {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .fields label span {
+    width: auto;
+  }
+}
