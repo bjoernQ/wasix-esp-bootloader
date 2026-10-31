@@ -2,7 +2,7 @@
 
 A local page that builds the ESP-IDF second-stage bootloader for the current Espressif chips and flashes it with Web Serial.
 
-Build does not compile inside the browser. The dev server runs `toolchain/build-real-bootloader.py` in WSL, which configures a small ESP-IDF project and runs `idf.py bootloader`. The image is the normal IDF bootloader: it brings the chip up, checks the application, and jumps to it.
+Build compiles that bootloader in the browser. The page loads the ESP-IDF sources and runs the WASI `clang` and `ld.lld` shipped with this project. It does not call a host GCC or `idf.py`.
 
 ## Run the page
 
@@ -14,32 +14,29 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173/ . Pick a chip and the bootloader options, then Build. The first build for a chip configures ESP-IDF and takes a few minutes. Later builds reuse `/opt/idf-targets/<chip>` in WSL.
+Open http://localhost:5173/ . Pick a chip and the bootloader options, then Build. The compiler is about 180 MB and is cached for the browser session. The first build for a chip also downloads that chip's source package and takes several minutes.
 
 Connect opens the serial port. Flash writes the image at the offset shown on the page (download mode stays at 115200). Monitor resets the chip and listens at the console baud. Clear empties the log.
 
-`npm run build` typechecks and writes `web/dist`. `npm run preview` serves that build and still needs the same WSL build machine, because Build calls `/api/bootloader` on the dev or preview server.
+`npm run build` typechecks and writes `web/dist`. That directory is a static site: HTML, JavaScript, the compiler, and the packed sources. Any plain HTTP server can host it. The page includes a service worker that adds the cross-origin isolation headers WebAssembly needs, then reloads once. Servers that already send those headers skip the reload.
 
-## WSL build machine
-
-`toolchain/build-real-bootloader.py` expects this layout in Ubuntu:
-
-- ESP-IDF at `/opt/esp-idf` (this project was used with v6.2, commit `9c37a0a`)
-- A virtualenv at `/opt/idf-venv`, installed from `tools/requirements/requirements.core.txt` with the matching `espidf.constraints.v6.2.txt` in `~/.espressif/`
-- `riscv32-esp-elf-gcc` in `/opt/esp-clang/sysroots/riscv32-esp-elf/bin`
-- `xtensa-esp-elf-gcc` in `/opt/esp-clang/sysroots/xtensa-esp-elf/bin` (ESP32, ESP32-S2, and ESP32-S3)
-
-The script sets `IDF_PATH`, `IDF_PYTHON_ENV_PATH=/opt/idf-venv`, and `ESP_IDF_VERSION=6.2.0`. It copies `examples/get-started/hello_world` to `/opt/idf-targets/<chip>`, applies the options to `sdkconfig`, and builds `build/bootloader/bootloader.bin`.
-
-From this repo in the same Ubuntu machine:
-
-```bash
-python3 toolchain/build-real-bootloader.py --chip esp32c6 --mode dio --freq 40m --size 4MB --log info --baud 115200 --rollback 0 --sha256 1 --reset-gpio -1 --partition 0x8000
+```powershell
+cd web
+npm run build
+python -m http.server 8080 --directory dist
 ```
+
+## Sources
+
+The compiler is `web/public/toolchain/bin/clang` and `lld`, built by `toolchain/build-esp-clang.sh` from Espressif LLVM (`release/esp_22.x`) with wasi-sdk 34. Picolibc headers and `libc.a` / `libgcc.a` come from the Espressif GNU toolchain sysroot under `/opt/esp-clang/sysroots` in WSL. Those libraries are linked as data. The page does not run the GNU compilers.
+
+Every chip in the list has a static package at `web/public/boot-sources/<chip>.bin`. The browser downloads that file and compiles it. Nothing on the host runs while the page is open.
+
+`npm run pack-sources` writes those packages from a local ESP-IDF checkout. It reads `/opt/idf-targets/<chip>/build/bootloader` and the tree at `/opt/esp-idf`, then stores the file list, headers, `sdkconfig.h`, linker scripts, and picolibc/`libgcc` archives. This project was packed from ESP-IDF v6.2, commit `9c37a0a`. To compile a different release, check that tag out at `/opt/esp-idf`, regenerate each chip's bootloader directory so its file list matches, and run `npm run pack-sources` again. Chips without a package fail at Build. The chip list on the page is `web/public/toolchain/bootloader/chips.json`.
 
 ## Update the bootloader to a specific IDF release
 
-The page builds whatever tree is checked out at `/opt/esp-idf`. `toolchain/build-real-bootloader.py` also forces `ESP_IDF_VERSION` to `6.2.0` and reuses `/opt/idf-targets/<chip>`, so a new release needs the checkout, the Python packages, that version string, and the old chip projects updated together. Run these as root in Ubuntu. Replace `v5.4.2` with the release tag you want (`v5.4.2`, `v5.5.1`, `v6.1`, and so on).
+The sources the page compiles are whatever is checked out at `/opt/esp-idf`. Run this as root in Ubuntu. Replace `v5.4.2` with the release tag (`v5.4.2`, `v5.5.1`, `v6.1`, and so on).
 
 ```bash
 cd /opt/esp-idf
@@ -48,35 +45,15 @@ git checkout v5.4.2
 git submodule update --init --recursive
 ```
 
-Install the Python packages for that minor version. The constraints file name is `v<major>.<minor>`, so `v5.4.2` uses `espidf.constraints.v5.4.txt`.
+Regenerate `/opt/idf-targets/<chip>/build/bootloader` for that checkout, then run `npm run pack-sources` in `web/`. The page compiles the new package with the in-browser clang. Picolibc has to match the release: the versions are `riscv32-esp-elf` and `xtensa-esp-elf` in `/opt/esp-idf/tools/tools.json`. Unpack those into `/opt/esp-clang/sysroots/riscv32-esp-elf` and `/opt/esp-clang/sysroots/xtensa-esp-elf`.
 
-```bash
-curl -fsSL -o /root/.espressif/espidf.constraints.v5.4.txt \
-  https://dl.espressif.com/dl/esp-idf/espidf.constraints.v5.4.txt
-rm -rf /opt/idf-venv
-python3 -m venv /opt/idf-venv
-/opt/idf-venv/bin/python -m pip install \
-  -r /opt/esp-idf/tools/requirements/requirements.core.txt \
-  -c /root/.espressif/espidf.constraints.v5.4.txt
-```
-
-In `toolchain/build-real-bootloader.py`, set `ESP_IDF_VERSION` to the release number without the leading `v` (`5.4.2` for tag `v5.4.2`). The script passes that value into `idf.py`. It has to match the constraints file above.
-
-Drop the old per-chip projects. The next Build copies `examples/get-started/hello_world` from the new tree and runs `idf.py set-target` again.
-
-```bash
-rm -rf /opt/idf-targets
-```
-
-The script looks for `riscv32-esp-elf-gcc` and `xtensa-esp-elf-gcc` in `/opt/esp-clang/sysroots/riscv32-esp-elf/bin` and `/opt/esp-clang/sysroots/xtensa-esp-elf/bin`. The versions that release expects are listed in `/opt/esp-idf/tools/tools.json` under `riscv32-esp-elf` and `xtensa-esp-elf`. If `idf.py` reports a toolchain mismatch, install those versions and put their `bin` directories on those two paths.
-
-Chips that release does not contain still appear on the page. Build fails for those at `set-target`. The list is `CHIPS` in `toolchain/build-real-bootloader.py` and `web/public/toolchain/bootloader/chips.json`.
+Chips the release does not contain still appear on the page. Their source list will not match and Build fails for them.
 
 ## What stays out of git
 
 `web/node_modules`, `web/dist`, and `.wasmer-cache` are installed or downloaded locally.
 
-`web/public/toolchain/bin/` holds the optional wasm `clang` and `ld.lld` (about 180 MB). The page does not use them. They belong to an earlier experiment that compiled a small freestanding program in the browser. `toolchain/build-esp-clang.sh` and `toolchain/wasi-compat/` are the scripts from that build.
+`web/public/toolchain/bin/` holds the wasm `clang` and `ld.lld` (about 180 MB) that Build runs. `toolchain/build-esp-clang.sh` and `toolchain/wasi-compat/` are how those binaries were built.
 
 `toolchain/out/` is local compiler output. `/opt/idf-targets` in WSL is the per-chip IDF build tree.
 

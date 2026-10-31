@@ -1,6 +1,6 @@
 import { bootloader } from "virtual:project-files";
 import { Board } from "./flash";
-import { buildIdfBootloader } from "./idf-boot";
+import { compileIdfBootloader } from "./compile-boot";
 import type { BootOptions } from "./wasix";
 
 type Chip = {
@@ -21,12 +21,12 @@ app.innerHTML = `
   <header>
     <div>
       <h1>ESP-IDF bootloader</h1>
-      <p>Build runs the ESP-IDF second-stage bootloader for the selected chip.</p>
+      <p>Build compiles the ESP-IDF second-stage bootloader in the browser.</p>
     </div>
     <div id="isolation"></div>
   </header>
   <section class="note">
-    This is the ESP-IDF bootloader. It brings up the chip, reads the partition table, checks the application, and jumps to it. Flash mode, frequency, size, log level, console baud, rollback, SHA-256 checking, factory-reset GPIO, and the partition offset come from the ESP-IDF configuration.
+    This is the ESP-IDF bootloader, compiled here with clang. It brings up the chip, reads the partition table, checks the application, and jumps to it. Flash mode, frequency, size, log level, console baud, rollback, SHA-256 checking, factory-reset GPIO, and the partition offset are applied to the bootloader configuration before that compile.
     Download mode always uses 115200. Flash tries the classic UART reset, then the USB-JTAG reset used by C3, S3, and later DevKits. Monitor pulses the chip into the running application and listens at the console baud. Flashing replaces the bootloader at <code id="flash-at"></code>.
   </section>
   <div class="toolbar">
@@ -74,7 +74,7 @@ const monitorButton = byId("monitor") as HTMLButtonElement;
 const flashAt = byId("flash-at");
 const isolation = byId("isolation");
 
-isolation.textContent = crossOriginIsolated ? "cross-origin isolated" : "not isolated — Build needs COOP/COEP";
+isolation.textContent = crossOriginIsolated ? "cross-origin isolated" : "waiting to isolate this page";
 
 for (const chip of chips) {
   const option = document.createElement("option");
@@ -82,7 +82,7 @@ for (const chip of chips) {
   option.textContent = `${chip.label} (${chip.arch})`;
   chipSelect.append(option);
 }
-chipSelect.value = chips.some((chip) => chip.id === "esp32c3") ? "esp32c3" : chips[0].id;
+chipSelect.value = chips.some((chip) => chip.id === "esp32c6") ? "esp32c6" : chips[0].id;
 
 let image: Uint8Array | null = null;
 let imageChip: Chip | null = null;
@@ -157,7 +157,7 @@ for (const node of [chipSelect, modeSelect, freqSelect, sizeSelect, logSelect, b
 }
 
 showOffset();
-append(`Ready. ${chips.length} chips. Build compiles the ESP-IDF bootloader. The first build for a chip takes a few minutes.`);
+append(`Ready. ${chips.length} chips. Build compiles the ESP-IDF bootloader in the browser. Loading the compiler and the first chip takes several minutes.`);
 
 buildButton.addEventListener("click", async () => {
   if (busy) return;
@@ -165,7 +165,7 @@ buildButton.addEventListener("click", async () => {
   buildButton.disabled = true;
   try {
     const chip = selectedChip();
-    const built = await buildIdfBootloader(options(), append);
+    const built = await compileIdfBootloader(options(), append);
     const chipId = new DataView(built.buffer, built.byteOffset, built.byteLength).getUint16(12, true);
     if (chipId !== chip.chipId) throw new Error(`image chip id ${chipId} does not match ${chip.label}`);
     image = built;

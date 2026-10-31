@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "pack-sources": "node --experimental-strip-types pack-boot-sources.ts",
     "wasix": "node wasix-build.mjs"
   },
   "dependencies": {

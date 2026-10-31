@@ -91,6 +91,14 @@ if "#elif defined(__wasi__) || defined(__wasm__)" not in text:
     if old not in text:
         raise SystemExit("clang Compiler.h visibility guard not found")
     compiler.write_text(text.replace(old, new, 1))
+stack = src / "clang/lib/Basic/Stack.cpp"
+text = stack.read_text()
+old = "bool clang::isStackNearlyExhausted() {\n  // We consider 256 KiB"
+new = "bool clang::isStackNearlyExhausted() {\n#if defined(__wasi__)\n  return false;\n#endif\n  // We consider 256 KiB"
+if old in text:
+    stack.write_text(text.replace(old, new, 1))
+elif "#if defined(__wasi__)" not in text[text.find("isStackNearlyExhausted"):text.find("isStackNearlyExhausted") + 400]:
+    raise SystemExit("Stack.cpp hook not found")
 PY
 
 COMPAT="$ROOT/wasi-compat"
@@ -150,7 +158,7 @@ cmake -G Ninja -S "$SRC/llvm" -B "$WASI_BUILD" \
     -DCMAKE_BUILD_TYPE=MinSizeRel \
     -DCMAKE_C_FLAGS="$WASI_DEFS" \
     -DCMAKE_CXX_FLAGS="$WASI_DEFS" \
-    -DCMAKE_EXE_LINKER_FLAGS="-lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-getpid -lwasi-emulated-signal -lsetjmp" \
+    -DCMAKE_EXE_LINKER_FLAGS="-lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-getpid -lwasi-emulated-signal -lsetjmp -Wl,-z,stack-size=67108864" \
     -DCMAKE_CXX_STANDARD_LIBRARIES="$COMPAT/libwasi-llvm-stubs.a -lwasi-emulated-mman -lwasi-emulated-process-clocks -lwasi-emulated-getpid -lwasi-emulated-signal -lsetjmp" \
     -DCMAKE_C_COMPILER_WORKS=ON \
     -DCMAKE_CXX_COMPILER_WORKS=ON \

@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, statSync, cpSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
-import { idfBootloaderApi } from "./idf-api.ts";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -62,7 +61,7 @@ function copyWasmerSdk(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [projectFiles(), copyWasmerSdk(), idfBootloaderApi()],
+  plugins: [projectFiles(), copyWasmerSdk()],
   optimizeDeps: { exclude: ["@wasmer/sdk"] },
   build: {
     rollupOptions: {
