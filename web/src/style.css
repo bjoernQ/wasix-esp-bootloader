@@ -1,8 +1,8 @@
 :root {
-  color: #1c1915;
-  background: #f4f0e8;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  line-height: 1.4;
+  color: white;
+  background: rgb(53, 53, 53);
+  font-family: "Fira Sans", sans-serif;
+  line-height: 1.45;
 }
 
 * { box-sizing: border-box; }
@@ -12,160 +12,148 @@ body {
   min-height: 100vh;
 }
 
-button, select, textarea, input {
+button, select, input {
   font: inherit;
+  color: inherit;
 }
 
 #app {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
   min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 40px 20px 24px;
 }
 
-header, .note, .toolbar {
-  padding: 12px 16px;
+.content {
+  width: 900px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 64px);
 }
 
 header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: baseline;
-  background: #1f3a34;
-  color: #f6f3ec;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+header img {
+  width: 100px;
+  height: auto;
+  margin-bottom: 12px;
 }
 
 header h1 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 650;
+  margin: 0.5rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 500;
 }
 
 header p {
-  margin: 4px 0 0;
-  color: #d5e4df;
+  margin: 0.35rem 0 0;
+  color: #c0c0c0;
 }
 
-#isolation {
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 0.85rem;
+h2 {
+  margin: 2.5rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 500;
 }
 
-.note {
-  background: #fff8e8;
-  border-bottom: 1px solid #e4d7b8;
+.fields label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px;
+  border-bottom: 2px solid #454444;
 }
 
-.toolbar {
+.fields label span {
+  width: 160px;
+  flex: none;
+  color: #d6991d;
+}
+
+select,
+input[type="number"],
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid #454444;
+  border-radius: 0;
+  padding: 6px 0;
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-bottom-color: #d6991d;
+}
+
+select option {
+  color: black;
+  background: white;
+}
+
+input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: #d6991d;
+}
+
+.actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  background: #fff;
-  border-bottom: 1px solid #ddd4c6;
-}
-
-button, select, input[type="number"], input[type="text"] {
-  border: 1px solid #c9bfb0;
-  background: #fff;
-  border-radius: 6px;
-  padding: 6px 10px;
-}
-
-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-input[type="number"], input[type="text"] {
-  width: 7.5rem;
+  gap: 12px;
+  margin-top: 1.5rem;
 }
 
 button {
   cursor: pointer;
+  background: transparent;
+  color: #d6991d;
+  border: 2px solid #454444;
+  border-radius: 0;
+  padding: 8px 16px;
+}
+
+button.primary {
+  background: #d6991d;
+  color: rgb(53, 53, 53);
+  border-color: #d6991d;
+  font-weight: 500;
 }
 
 button:disabled {
   cursor: default;
-  opacity: 0.55;
-}
-
-button.primary {
-  background: #1f3a34;
-  color: #f6f3ec;
-  border-color: #1f3a34;
-}
-
-.workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-height: 0;
-}
-
-.editor, .terminal {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.tabs {
-  display: flex;
-  gap: 4px;
-  overflow: auto;
-  padding: 8px 8px 0;
-  background: #ebe4d8;
-}
-
-.tabs button {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-  white-space: nowrap;
-}
-
-.tabs button.active {
-  background: #fff;
-  border-bottom-color: #fff;
-}
-
-textarea {
-  flex: 1;
-  width: 100%;
-  border: 0;
-  resize: none;
-  padding: 12px;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.45;
-  background: #fff;
-}
-
-.terminal {
-  background: #1b1a17;
-  color: #e8e2d6;
-}
-
-.terminal h2 {
-  margin: 0;
-  padding: 8px 12px;
-  font-size: 0.85rem;
-  font-weight: 650;
-  color: #b7c7c1;
+  opacity: 0.45;
 }
 
 #log {
   flex: 1;
-  margin: 0;
-  padding: 0 12px 12px;
+  min-height: 240px;
+  margin: 0.75rem 0 0;
+  padding: 12px;
   overflow: auto;
+  background: #2e2e2e;
+  border: 2px solid #454444;
+  color: #c0c0c0;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
+  font-size: 13px;
 }
 
-@media (max-width: 800px) {
-  .workspace { grid-template-columns: 1fr; }
-  .terminal { min-height: 240px; border-left: 0; border-top: 1px solid #ddd4c6; }
-  header { flex-direction: column; }
+@media (max-width: 640px) {
+  .fields label {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .fields label span {
+    width: auto;
+  }
 }

@@ -1,12 +1,12 @@
 # ESP-IDF bootloader builder
 
-A local page that builds the ESP-IDF second-stage bootloader for the current Espressif chips and flashes it with Web Serial.
+A local page that builds the ESP-IDF second-stage bootloader for the current Espressif chips and downloads the image.
 
 Build compiles that bootloader in the browser. The page loads the ESP-IDF sources and runs the WASI `clang` and `ld.lld` shipped with this project. It does not call a host GCC or `idf.py`.
 
 ## Run the page
 
-You need Node.js 22 or newer, and Chrome or Edge for Web Serial.
+You need Node.js 22 or newer.
 
 ```powershell
 cd web
@@ -16,7 +16,7 @@ npm run dev
 
 Open http://localhost:5173/ . Pick a chip and the bootloader options, then Build. The compiler is about 180 MB and is cached for the browser session. The first build for a chip also downloads that chip's source package and takes several minutes.
 
-Connect opens the serial port. Flash writes the image at the offset shown on the page (download mode stays at 115200). Monitor resets the chip and listens at the console baud. Clear empties the log.
+Download saves the `.bin`. The log shows the flash offset where that chip's ROM loads it. Clear empties the log.
 
 `npm run build` typechecks and writes `web/dist`. That directory is a static site: HTML, JavaScript, the compiler, and the packed sources. Any plain HTTP server can host it. The page includes a service worker that adds the cross-origin isolation headers WebAssembly needs, then reloads once. Servers that already send those headers skip the reload.
 
