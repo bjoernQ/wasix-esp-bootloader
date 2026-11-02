@@ -16,6 +16,8 @@ type Job = {
   member: string;
 };
 
+type PackedSource = { src: string; lib: string };
+
 type Recipe = {
   target: string;
   machine: string;
@@ -28,6 +30,8 @@ type Recipe = {
   libgcc: string;
   sdkconfig: string;
   revisions: { min: number; minFull: number; maxFull: number };
+  secureBoot: PackedSource[];
+  flashEncryption: PackedSource[];
 };
 
 function wsl(unix: string): string {
@@ -216,6 +220,7 @@ function recipeFor(chip: string): { recipe: Recipe; files: Map<string, Buffer> }
 
   const sdkconfig = "build/config/sdkconfig.h";
   if (!files.has(sdkconfig)) throw new Error("sdkconfig.h is missing");
+  const security = securitySources(chip, files);
 
   return {
     files,
@@ -235,8 +240,45 @@ function recipeFor(chip: string): { recipe: Recipe; files: Map<string, Buffer> }
         minFull: revFlag(ninja, "min-rev-full", 0),
         maxFull: revFlag(ninja, "max-rev-full", 65535),
       },
+      secureBoot: security.secureBoot,
+      flashEncryption: security.flashEncryption,
     },
   };
+}
+
+function securitySources(chip: string, files: Map<string, Buffer>): { secureBoot: PackedSource[]; flashEncryption: PackedSource[] } {
+  const idf = "/opt/esp-idf";
+  const support = "libbootloader_support.a";
+  const verify = "libesp_image_verify.a";
+  const flashEncryption: PackedSource[] = [
+    source(files, `${idf}/components/bootloader_support/src/flash_encryption/flash_encrypt.c`, support),
+    source(
+      files,
+      chip === "esp32"
+        ? `${idf}/components/bootloader_support/src/esp32/flash_encryption_secure_features.c`
+        : `${idf}/components/bootloader_support/src/flash_encryption/flash_encryption_secure_features.c`,
+      support,
+    ),
+  ];
+  const secureBoot: PackedSource[] = chip === "esp32h4" ? [] : chip === "esp32" ? [
+    source(files, `${idf}/components/esp_image_verify/src/secure_boot_v1/secure_boot.c`, verify),
+    source(files, `${idf}/components/esp_image_verify/src/secure_boot_v1/secure_boot_signatures_bootloader.c`, verify),
+    source(files, `${idf}/components/bootloader_support/src/esp32/secure_boot_secure_features.c`, support),
+  ] : [
+    source(files, `${idf}/components/esp_image_verify/src/secure_boot_v2/secure_boot.c`, verify),
+    source(files, `${idf}/components/esp_image_verify/src/secure_boot_v2/secure_boot_signatures_bootloader.c`, verify),
+    source(files, `${idf}/components/bootloader_support/src/secure_boot/secure_boot_secure_features.c`, support),
+  ];
+  return { secureBoot, flashEncryption };
+}
+
+function source(files: Map<string, Buffer>, unix: string, lib: string): PackedSource {
+  const host = wsl(unix);
+  if (!existsSync(host)) throw new Error(`security source is missing: ${unix}`);
+  const src = guestOf(unix);
+  files.set(src, readFileSync(host));
+  addNeighborHeaders(unix.slice(0, unix.lastIndexOf("/")), files);
+  return { src, lib };
 }
 
 function revFlag(text: string, name: string, fallback: number): number {

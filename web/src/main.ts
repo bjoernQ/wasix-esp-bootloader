@@ -35,6 +35,13 @@ app.innerHTML = `
       <label><span>Reset GPIO</span><input id="gpio" type="number" step="1" value="-1"></label>
       <label><span>Rollback</span><input id="rollback" type="checkbox"></label>
       <label><span>Require SHA-256</span><input id="sha256" type="checkbox" checked></label>
+      <label><span>Secure boot</span><input id="secure-boot" type="checkbox"></label>
+      <label id="verify-key-row" hidden><span>Verify key</span><input id="verify-key" type="text" spellcheck="false" placeholder="64-byte public key, hex"></label>
+      <label><span>Flash encryption</span><select id="encryption"></select></label>
+    </div>
+    <div class="notes">
+      <p id="secure-note"></p>
+      <p>The first boot burns the flash encryption key into eFuse. That key cannot be read back. Release mode write-protects those eFuses and disables UART download, so encryption stays on. Development mode still burns the key. UART download stays usable, and encryption can still be turned off by burning more eFuse bits.</p>
     </div>
     <div class="actions">
       <button id="build" class="primary">Build</button>
@@ -56,6 +63,11 @@ const partitionInput = byId("partition") as HTMLInputElement;
 const gpioInput = byId("gpio") as HTMLInputElement;
 const rollbackInput = byId("rollback") as HTMLInputElement;
 const shaInput = byId("sha256") as HTMLInputElement;
+const secureInput = byId("secure-boot") as HTMLInputElement;
+const verifyRow = byId("verify-key-row");
+const verifyInput = byId("verify-key") as HTMLInputElement;
+const encryptionSelect = fill("encryption", ["off", "development", "release"], "off");
+const secureNote = "Secure boot images from this page are unsigned. Sign the downloaded file before flashing. Secure Boot V2: espsecure.py sign_data --version 2. The image is padded to 4 KB so the signature sector lines up. ESP32 uses Secure Boot V1 and needs the 64-byte verification public key pasted above. The private key stays on your machine.";
 const logEl = byId("log");
 const buildButton = byId("build") as HTMLButtonElement;
 const downloadButton = byId("download") as HTMLButtonElement;
@@ -67,6 +79,7 @@ for (const chip of chips) {
   chipSelect.append(option);
 }
 chipSelect.value = chips.some((chip) => chip.id === "esp32c6") ? "esp32c6" : chips[0].id;
+syncChip();
 
 let image: Uint8Array | null = null;
 let imageChip: Chip | null = null;
@@ -88,6 +101,17 @@ function fill(id: string, values: string[], selected: string): HTMLSelectElement
   }
   select.value = selected;
   return select;
+}
+
+function syncChip(): void {
+  const id = chipSelect.value;
+  verifyRow.hidden = id !== "esp32" || !secureInput.checked;
+  const note = document.getElementById("secure-note");
+  if (note) note.textContent = id === "esp32h4"
+    ? "ESP32-H4 does not support secure boot. Flash encryption is still available."
+    : secureNote;
+  secureInput.disabled = id === "esp32h4";
+  if (id === "esp32h4") secureInput.checked = false;
 }
 
 function selectedChip(): Chip {
@@ -123,12 +147,18 @@ function options(): BootOptions {
     sha256: shaInput.checked,
     resetGpio,
     partition: partitionInput.value.trim(),
+    secureBoot: secureInput.checked,
+    verifyKey: verifyInput.value.trim(),
+    encryption: encryptionSelect.value as BootOptions["encryption"],
   };
 }
 
-for (const node of [chipSelect, modeSelect, freqSelect, sizeSelect, logSelect, baudInput, partitionInput, gpioInput, rollbackInput, shaInput]) {
+for (const node of [chipSelect, modeSelect, freqSelect, sizeSelect, logSelect, baudInput, partitionInput, gpioInput, rollbackInput, shaInput, secureInput, verifyInput, encryptionSelect]) {
   node.addEventListener("change", invalidate);
 }
+verifyInput.addEventListener("input", invalidate);
+chipSelect.addEventListener("change", syncChip);
+secureInput.addEventListener("change", syncChip);
 
 append(`Ready. ${chips.length} chips. Build compiles the ESP-IDF bootloader in the browser. Loading the compiler and the first chip takes several minutes.`);
 

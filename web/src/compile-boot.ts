@@ -4,6 +4,7 @@ import type { BootOptions } from "./wasix";
 
 type ListedFile = { path: string; offset: number; size: number };
 type Job = { src: string; out: string; lib: string | null; member: string };
+type PackedSource = { src: string; lib: string };
 type Recipe = {
   target: string;
   machine: string;
@@ -16,6 +17,8 @@ type Recipe = {
   libgcc: string;
   sdkconfig: string;
   revisions: { min: number; minFull: number; maxFull: number };
+  secureBoot?: PackedSource[];
+  flashEncryption?: PackedSource[];
   files: ListedFile[];
 };
 
@@ -24,11 +27,14 @@ const freqs = ["80M", "40M", "26M", "20M"];
 const sizes = ["1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"];
 const logs = ["NONE", "ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"];
 const logLevel: Record<string, number> = { none: 0, error: 1, warn: 2, info: 3, debug: 4, verbose: 5 };
+const ecdsaV2 = new Set(["esp32c2", "esp32c61"]);
 
 let client: WasmerClient | null = null;
 let compiler: Package | null = null;
 
 export async function compileIdfBootloader(options: BootOptions, log: (line: string) => void): Promise<Uint8Array> {
+  if (options.secureBoot && options.chip === "esp32h4") throw new Error("ESP32-H4 does not support secure boot.");
+  if (options.secureBoot && options.chip === "esp32") parseVerifyKey(options.verifyKey);
   if (!crossOriginIsolated) {
     throw new Error("This page is not cross-origin isolated, so the compiler cannot start. Open it over HTTP and let the page reload once.");
   }
@@ -38,7 +44,8 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
   const packed = new Uint8Array(await bundle.arrayBuffer());
   const { recipe, files } = unpack(packed);
   patchConfig(files, recipe.sdkconfig, options);
-  log(`Sources ${Math.round(packed.length / 1000000)} MB, ${recipe.jobs.length} files.`);
+  const jobs = configuredJobs(recipe, options);
+  log(`Sources ${Math.round(packed.length / 1000000)} MB, ${jobs.length} files.`);
 
   client ??= new Wasmer({ outputBytes: 8_000_000 });
   await client.ready();
@@ -69,10 +76,10 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
     await sandbox.fs.mkdir("/workspace/libs", { recursive: true });
     const objects = new Map<string, { member: string; data: Uint8Array }[]>();
     const direct: Uint8Array[] = [];
-    for (let index = 0; index < recipe.jobs.length; index += 1) {
-      const job = recipe.jobs[index];
-      log(`clang ${index + 1}/${recipe.jobs.length} ${job.src}`);
-      const common = recipe.common.map((flag) => flag === "-O0" && recipe.target.startsWith("xtensa") ? "-Os" : flag);
+    const common = recipe.common.map((flag) => flag === "-O0" && recipe.target.startsWith("xtensa") ? "-Os" : flag);
+    for (let index = 0; index < jobs.length; index += 1) {
+      const job = jobs[index];
+      log(`clang ${index + 1}/${jobs.length} ${job.src}`);
       const object = job.src.endsWith(".S") || job.src.endsWith(".s")
         ? await assemble(sandbox, ready, recipe.target, common, job.src, `/workspace/${job.out}`)
         : await clang(sandbox, ready, [...common, "-c", `/workspace/${job.src}`, "-o", `/workspace/${job.out}`], job.src);
@@ -91,6 +98,19 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
       await sandbox.fs.writeFile(guest, archive(members));
       libArgs.push(guest);
     }
+    if (options.secureBoot && options.chip === "esp32") {
+      const key = parseVerifyKey(options.verifyKey);
+      const bytes = [...key].map((value) => `0x${value.toString(16).padStart(2, "0")}`).join(",");
+      const source = `const unsigned char _binary_signature_verification_key_bin_start[64] __attribute__((aligned(4), used)) = {${bytes}};\n`;
+      await sandbox.fs.writeFile("/workspace/obj/signature_verification_key.c", text(source));
+      log("clang verification public key");
+      direct.push(await clang(
+        sandbox,
+        ready,
+        [...common, "-c", "/workspace/obj/signature_verification_key.c", "-o", "/workspace/obj/signature_verification_key.o"],
+        "signature_verification_key.c",
+      ));
+    }
     for (let index = 0; index < direct.length; index += 1) {
       await sandbox.fs.writeFile(`/workspace/direct-${index}.o`, direct[index]);
     }
@@ -103,6 +123,9 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
       ...recipe.undefined.flatMap((symbol) => ["-u", symbol]),
       ...recipe.scripts.flatMap((script) => ["-T", script]),
       ...direct.map((_, index) => `/workspace/direct-${index}.o`),
+      ...(options.secureBoot && options.chip === "esp32"
+        ? ["--defsym", "_binary_signature_verification_key_bin_end=_binary_signature_verification_key_bin_start+64"]
+        : []),
       "--start-group",
       ...libArgs,
       recipe.libc,
@@ -112,16 +135,22 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
     ];
     await link(sandbox, ready, linkArgs);
     const elf = await sandbox.fs.readFile("/workspace/bootloader.elf");
+    assertDefined(elf, requiredSymbols(options));
+    const securePad = options.secureBoot && options.chip !== "esp32";
     const image = await elfToImage(elf, {
       chip: options.chip,
       mode: options.mode,
       freq: options.freq,
       size: options.size,
       sha256: options.sha256,
+      securePad,
       minRev: recipe.revisions.min,
       minRevFull: recipe.revisions.minFull,
       maxRevFull: recipe.revisions.maxFull,
     });
+    if (securePad) log("Image padded to 4 KB for Secure Boot V2. Sign it with espsecure.py sign_data --version 2 before flashing.");
+    if (options.secureBoot && options.chip === "esp32") log("ESP32 Secure Boot V1 image. Sign applications with the private key that matches the embedded verification key.");
+    if (options.encryption !== "off") log(`Flash encryption is ${options.encryption}. The first boot burns the key into eFuse.`);
     log(`ESP-IDF bootloader ${image.length} bytes.`);
     return image;
   } finally {
@@ -158,7 +187,139 @@ function patchConfig(files: Record<string, Uint8Array>, sdkconfig: string, optio
   text = setBool(text, "CONFIG_BOOTLOADER_FACTORY_RESET", options.resetGpio >= 0);
   if (options.resetGpio >= 0) text = setDefine(text, "CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET", String(options.resetGpio));
   text = setBool(text, "CONFIG_BOOTLOADER_SKIP_VALIDATE_ALWAYS", !options.sha256);
+  text = patchSecurity(text, options);
   files[sdkconfig] = new TextEncoder().encode(text);
+}
+
+function patchSecurity(text: string, options: BootOptions): string {
+  if (options.secureBoot) {
+    if (options.chip === "esp32h4") throw new Error("ESP32-H4 does not support secure boot.");
+    text = setBool(text, "CONFIG_SECURE_BOOT", true);
+    text = setBool(text, "CONFIG_SECURE_SIGNED_ON_BOOT", true);
+    text = setBool(text, "CONFIG_SECURE_SIGNED_ON_UPDATE", true);
+    text = setBool(text, "CONFIG_SECURE_SIGNED_APPS", true);
+    text = setBool(text, "CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES", false);
+    if (options.chip === "esp32") {
+      text = setBool(text, "CONFIG_SECURE_BOOT_V1_ENABLED", true);
+      text = setBool(text, "CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME", true);
+      text = setBool(text, "CONFIG_SECURE_BOOTLOADER_ONE_TIME_FLASH", true);
+    } else {
+      text = setBool(text, "CONFIG_SECURE_BOOT_V2_ENABLED", true);
+      if (ecdsaV2.has(options.chip)) {
+        text = setBool(text, "CONFIG_SECURE_SIGNED_APPS_ECDSA_V2_SCHEME", true);
+        text = setBool(text, "CONFIG_SECURE_BOOT_ECDSA_KEY_LEN_256_BITS", true);
+        text = setBool(text, "CONFIG_SECURE_BOOT_V2_ECDSA_ENABLED", true);
+      } else {
+        text = setBool(text, "CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME", true);
+        text = setBool(text, "CONFIG_SECURE_BOOT_V2_RSA_ENABLED", true);
+      }
+    }
+  }
+  if (options.encryption !== "off") {
+    const release = options.encryption === "release";
+    const derived = options.chip === "esp32c2" && options.secureBoot;
+    text = setBool(text, "CONFIG_SECURE_FLASH_ENC_ENABLED", true);
+    text = setBool(text, "CONFIG_SECURE_FLASH_ENCRYPTION_KEY_SOURCE_EFUSES", true);
+    text = setBool(text, "CONFIG_SPI_FLASH_ENABLE_ENCRYPTED_READ_WRITE", true);
+    if (options.chip !== "esp32") {
+      text = setBool(text, derived ? "CONFIG_SECURE_FLASH_ENCRYPTION_AES128_DERIVED" : "CONFIG_SECURE_FLASH_ENCRYPTION_AES128", true);
+    }
+    text = setBool(text, "CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE", release);
+    text = setBool(text, "CONFIG_SECURE_FLASH_ENCRYPTION_MODE_DEVELOPMENT", !release);
+    text = setBool(text, "CONFIG_SECURE_FLASH_UART_BOOTLOADER_ALLOW_ENC", !release);
+    if (release) text = setBool(text, "CONFIG_PARTITION_TABLE_MD5", true);
+    if (derived) text = setBool(text, "CONFIG_SECURE_BOOT_FLASH_ENC_KEYS_BURN_TOGETHER", true);
+  }
+  return text;
+}
+
+function configuredJobs(recipe: Recipe, options: BootOptions): Job[] {
+  const jobs = [...recipe.jobs];
+  const extras: PackedSource[] = [];
+  if (options.encryption !== "off") {
+    if (!recipe.flashEncryption?.length) throw new Error("This source bundle has no flash-encryption sources. Pack the boot sources again.");
+    extras.push(...recipe.flashEncryption);
+  }
+  if (options.secureBoot && options.chip !== "esp32h4") {
+    if (!recipe.secureBoot?.length) throw new Error("This source bundle has no secure-boot sources. Pack the boot sources again.");
+    extras.push(...recipe.secureBoot);
+  }
+  for (const extra of extras) jobs.push(extraJob(extra, jobs));
+  return jobs;
+}
+
+function extraJob(extra: PackedSource, jobs: Job[]): Job {
+  const file = extra.src.slice(extra.src.lastIndexOf("/") + 1);
+  const stem = file.slice(0, file.lastIndexOf(".")) || file;
+  const used = new Set(jobs.filter((job) => job.lib === extra.lib).map((job) => job.member));
+  // Member names have to match the bootloader linker script globs (flash_encrypt.*, secure_boot.*).
+  let member = `${file}.o`;
+  let index = 0;
+  while (used.has(member)) {
+    index += 1;
+    member = `${stem}.${index}.o`;
+  }
+  return {
+    src: extra.src,
+    lib: extra.lib,
+    member,
+    out: `obj/${extra.lib.replace(/[^\w.+-]/g, "_")}-${member}`,
+  };
+}
+
+function parseVerifyKey(value: string): Uint8Array {
+  const hex = value.replace(/0x/gi, "").replace(/[^0-9a-fA-F]/g, "");
+  if (hex.length % 2 !== 0) throw new Error("The verification public key must be an even number of hex digits.");
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  if (bytes.length === 65 && bytes[0] === 0x04) return bytes.subarray(1);
+  if (bytes.length !== 64) throw new Error("ESP32 Secure Boot V1 needs the 64-byte verification public key (raw X and Y, hex).");
+  return bytes;
+}
+
+function requiredSymbols(options: BootOptions): string[] {
+  const names: string[] = [];
+  if (options.encryption !== "off") names.push("esp_flash_encrypt_init", "esp_flash_encryption_enable_secure_features");
+  if (options.secureBoot && options.chip !== "esp32h4") {
+    names.push("esp_secure_boot_enable_secure_features");
+    if (options.chip === "esp32") names.push("esp_secure_boot_generate_digest", "esp_secure_boot_permanently_enable", "_binary_signature_verification_key_bin_start");
+    else names.push("esp_secure_boot_v2_permanently_enable");
+  }
+  return names;
+}
+
+function assertDefined(elf: Uint8Array, names: string[]): void {
+  if (!names.length) return;
+  const defined = symbolValues(elf);
+  const missing = names.filter((name) => !defined.has(name));
+  if (missing.length) throw new Error(`link is missing ${missing.join(", ")}`);
+}
+
+function symbolValues(elf: Uint8Array): Set<string> {
+  const view = new DataView(elf.buffer, elf.byteOffset, elf.byteLength);
+  if (view.getUint32(0, true) !== 0x464c457f || elf[4] !== 1) return new Set();
+  const shoff = view.getUint32(32, true);
+  const shentsize = view.getUint16(46, true);
+  const shnum = view.getUint16(48, true);
+  const defined = new Set<string>();
+  for (let index = 0; index < shnum; index += 1) {
+    const off = shoff + index * shentsize;
+    if (view.getUint32(off + 4, true) !== 2) continue;
+    const link = view.getUint32(off + 24, true);
+    const symOff = view.getUint32(off + 16, true);
+    const symSize = view.getUint32(off + 20, true);
+    const strOff = shoff + link * shentsize;
+    const strings = elf.subarray(view.getUint32(strOff + 16, true), view.getUint32(strOff + 16, true) + view.getUint32(strOff + 20, true));
+    for (let at = symOff; at + 16 <= symOff + symSize; at += 16) {
+      if (view.getUint16(at + 14, true) === 0) continue;
+      const nameAt = view.getUint32(at, true);
+      let end = nameAt;
+      while (end < strings.length && strings[end] !== 0) end += 1;
+      const name = new TextDecoder().decode(strings.subarray(nameAt, end));
+      if (name && view.getUint32(at + 4, true) !== 0) defined.add(name);
+    }
+  }
+  return defined;
 }
 
 function choose(text: string, prefix: string, selected: string, names: string[], value: string): string {

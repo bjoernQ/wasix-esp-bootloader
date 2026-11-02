@@ -7,6 +7,8 @@ export type ImageOptions = {
   minRev: number;
   minRevFull: number;
   maxRevFull: number;
+  /** Pad with 0xFF to 4 KB so a Secure Boot V2 signature sector can be appended. */
+  securePad: boolean;
 };
 
 const flashMode: Record<string, number> = { qio: 0, qout: 1, dio: 2, dout: 3 };
@@ -54,11 +56,18 @@ export async function elfToImage(elf: Uint8Array, options: ImageOptions): Promis
   let image = concat(body);
   const pad = new Uint8Array(15 - (image.length % 16));
   image = concat([image, pad, new Uint8Array([checksum & 0xff])]);
-  if (!options.sha256) return image;
-  const bytes = new ArrayBuffer(image.byteLength);
-  new Uint8Array(bytes).set(image);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  return concat([image, digest]);
+  if (options.sha256) {
+    const bytes = new ArrayBuffer(image.byteLength);
+    new Uint8Array(bytes).set(image);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    image = concat([image, digest]);
+  }
+  if (!options.securePad) return image;
+  const extra = (4096 - (image.length % 4096)) % 4096;
+  if (!extra) return image;
+  const aligned = new Uint8Array(extra);
+  aligned.fill(0xff);
+  return concat([image, aligned]);
 }
 
 function loadSections(view: DataView, elf: Uint8Array): Segment[] {

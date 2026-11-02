@@ -93,6 +93,10 @@ export type BootOptions = {
   sha256: boolean;
   resetGpio: number;
   partition: string;
+  secureBoot: boolean;
+  /** ESP32 Secure Boot V1 verification public key, hex. Unused on other chips. */
+  verifyKey: string;
+  encryption: "off" | "development" | "release";
 };
 
 let compiler: Package | null = null;
