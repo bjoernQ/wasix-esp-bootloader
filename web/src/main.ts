@@ -1,5 +1,6 @@
 import { bootloader } from "virtual:project-files";
 import { compileIdfBootloader } from "./compile-boot";
+import { encryptions, freqs, logLevels, modes, readLink, sizes, writeLink, type LinkState } from "./query";
 import type { BootOptions } from "./wasix";
 
 type Chip = {
@@ -21,7 +22,7 @@ app.innerHTML = `
     <header>
       <img src="/esp-rs.svg" alt="esp-rs" width="100" height="100" />
       <h1>ESP-IDF second stage bootloader builder</h1>
-      <p>Build the second-stage bootloader in the browser.</p>
+      <p>Build the second-stage bootloader in the browser. The address bar stores these options, so the link opens the same setup.</p>
     </header>
     <h2>Options</h2>
     <div class="fields">
@@ -54,10 +55,10 @@ app.innerHTML = `
 `;
 
 const chipSelect = byId("chip") as HTMLSelectElement;
-const modeSelect = fill("mode", ["qio", "qout", "dio", "dout"], "dio");
-const freqSelect = fill("freq", ["80m", "40m", "26m", "20m"], "40m");
-const sizeSelect = fill("size", ["1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"], "4MB");
-const logSelect = fill("log-level", ["none", "error", "warn", "info", "debug", "verbose"], "info");
+const modeSelect = fill("mode", modes, "dio");
+const freqSelect = fill("freq", freqs, "40m");
+const sizeSelect = fill("size", sizes, "4MB");
+const logSelect = fill("log-level", logLevels, "info");
 const baudInput = byId("baud") as HTMLInputElement;
 const partitionInput = byId("partition") as HTMLInputElement;
 const gpioInput = byId("gpio") as HTMLInputElement;
@@ -66,7 +67,7 @@ const shaInput = byId("sha256") as HTMLInputElement;
 const secureInput = byId("secure-boot") as HTMLInputElement;
 const verifyRow = byId("verify-key-row");
 const verifyInput = byId("verify-key") as HTMLInputElement;
-const encryptionSelect = fill("encryption", ["off", "development", "release"], "off");
+const encryptionSelect = fill("encryption", encryptions, "off");
 const secureNote = "Secure boot images from this page are unsigned. Sign the downloaded file before flashing. Secure Boot V2: espsecure.py sign_data --version 2. The image is padded to 4 KB so the signature sector lines up. ESP32 uses Secure Boot V1 and needs the 64-byte verification public key pasted above. The private key stays on your machine.";
 const logEl = byId("log");
 const buildButton = byId("build") as HTMLButtonElement;
@@ -78,8 +79,11 @@ for (const chip of chips) {
   option.textContent = `${chip.label} (${chip.arch})`;
   chipSelect.append(option);
 }
-chipSelect.value = chips.some((chip) => chip.id === "esp32c6") ? "esp32c6" : chips[0].id;
+const chipIds = chips.map((chip) => chip.id);
+const loaded = readLink(location.search, chipIds);
+applyLink(loaded.state);
 syncChip();
+syncAddressBar();
 
 let image: Uint8Array | null = null;
 let imageChip: Chip | null = null;
@@ -91,7 +95,48 @@ function byId(id: string): HTMLElement {
   return node;
 }
 
-function fill(id: string, values: string[], selected: string): HTMLSelectElement {
+function applyLink(state: LinkState): void {
+  chipSelect.value = state.chip;
+  modeSelect.value = state.mode;
+  freqSelect.value = state.freq;
+  sizeSelect.value = state.size;
+  logSelect.value = state.log;
+  baudInput.value = state.baud;
+  partitionInput.value = state.partition;
+  gpioInput.value = state.gpio;
+  rollbackInput.checked = state.rollback;
+  shaInput.checked = state.sha256;
+  secureInput.checked = state.secure;
+  verifyInput.value = state.key;
+  encryptionSelect.value = state.encryption;
+}
+
+function currentLink(): LinkState {
+  return {
+    chip: chipSelect.value,
+    mode: modeSelect.value,
+    freq: freqSelect.value,
+    size: sizeSelect.value,
+    log: logSelect.value,
+    baud: baudInput.value,
+    partition: partitionInput.value,
+    gpio: gpioInput.value,
+    rollback: rollbackInput.checked,
+    sha256: shaInput.checked,
+    secure: secureInput.checked,
+    key: verifyInput.value,
+    encryption: encryptionSelect.value,
+  };
+}
+
+function syncAddressBar(): void {
+  const query = writeLink(currentLink(), chipIds);
+  const next = `${location.pathname}${query}${location.hash}`;
+  const current = `${location.pathname}${location.search}${location.hash}`;
+  if (next !== current) history.replaceState(history.state, "", next);
+}
+
+function fill(id: string, values: readonly string[], selected: string): HTMLSelectElement {
   const select = byId(id) as HTMLSelectElement;
   for (const value of values) {
     const option = document.createElement("option");
@@ -153,14 +198,21 @@ function options(): BootOptions {
   };
 }
 
-for (const node of [chipSelect, modeSelect, freqSelect, sizeSelect, logSelect, baudInput, partitionInput, gpioInput, rollbackInput, shaInput, secureInput, verifyInput, encryptionSelect]) {
-  node.addEventListener("change", invalidate);
+function onOptionChange(): void {
+  syncChip();
+  invalidate();
+  syncAddressBar();
 }
-verifyInput.addEventListener("input", invalidate);
-chipSelect.addEventListener("change", syncChip);
-secureInput.addEventListener("change", syncChip);
+
+for (const node of [chipSelect, modeSelect, freqSelect, sizeSelect, logSelect, baudInput, partitionInput, gpioInput, rollbackInput, shaInput, secureInput, verifyInput, encryptionSelect]) {
+  node.addEventListener("change", onOptionChange);
+}
+for (const node of [baudInput, partitionInput, gpioInput, verifyInput]) {
+  node.addEventListener("input", onOptionChange);
+}
 
 append(`Ready. ${chips.length} chips. Build compiles the ESP-IDF bootloader in the browser. Loading the compiler and the first chip takes several minutes.`);
+for (const warning of loaded.warnings) append(warning);
 
 buildButton.addEventListener("click", async () => {
   if (busy) return;
@@ -168,13 +220,18 @@ buildButton.addEventListener("click", async () => {
   buildButton.disabled = true;
   try {
     const chip = selectedChip();
-    const built = await compileIdfBootloader(options(), append);
+    const opts = options();
+    const built = await compileIdfBootloader(opts, append);
     const chipId = new DataView(built.buffer, built.byteOffset, built.byteLength).getUint16(12, true);
     if (chipId !== chip.chipId) throw new Error(`image chip id ${chipId} does not match ${chip.label}`);
     image = built;
     imageChip = chip;
     downloadButton.disabled = false;
     append(`Image ${built.length} bytes, chip id ${chipId}, flash at 0x${chip.flashOffset.toString(16)}.`);
+    const slot = Number(opts.partition) - chip.flashOffset;
+    if (Number.isFinite(slot) && slot > 0 && built.length > slot) {
+      append(`This image is ${built.length - slot} bytes past the ${slot}-byte slot from 0x${chip.flashOffset.toString(16)} to ${opts.partition}. The tail sits in the partition-table sector and the ROM checksum fails. Raise the partition offset so the slot is at least ${built.length} bytes.`);
+    }
   } catch (error) {
     append(error instanceof Error ? error.message : String(error));
   } finally {

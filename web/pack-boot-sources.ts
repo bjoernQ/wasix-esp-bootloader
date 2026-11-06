@@ -179,7 +179,7 @@ function recipeFor(chip: string): { recipe: Recipe; files: Map<string, Buffer> }
     "-D__STDC_WANT_LIB_EXT1__=0",
     ...defines,
     "-std=gnu23",
-    riscv ? "-O2" : "-Os",
+    "-Oz",
     "-ffunction-sections",
     "-fdata-sections",
     "-fno-jump-tables",

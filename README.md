@@ -16,6 +16,12 @@ npm run dev
 
 Open http://localhost:5173/ . Pick a chip and the bootloader options, then Build. The compiler is about 180 MB and is cached for the browser session. The first build for a chip also downloads that chip's source package and takes several minutes.
 
+The address bar stores the options. Copy it to open the page with the same setup. The link always names the chip. Any other parameter that is left out keeps its default. The names are `chip`, `mode`, `freq`, `size`, `log`, `baud`, `partition`, `gpio`, `rollback`, `sha256`, `secure`, `key`, and `encryption`. `frequency`, `log-level`, `reset-gpio`, `sha-256`, `secure-boot`, `verify-key`, and `flash-encryption` are accepted as well. Names and choices are matched without case. Checkboxes take `1` or `0` (`true`/`false`, `yes`/`no`, and `on`/`off` work too). A checkbox name on its own, as in `?rollback`, turns that option on. `key` is the ESP32 Secure Boot V1 verification public key in hex. A value the page does not recognize is ignored and reported in the log.
+
+```
+http://localhost:5173/?chip=esp32s3&mode=qio&freq=80m&size=8MB&log=debug&partition=0x9000&gpio=0&rollback=1&sha256=0&encryption=development
+```
+
 Download saves the `.bin`. The log shows the flash offset where that chip's ROM loads it. Clear empties the log.
 
 `npm run build` typechecks and writes `web/dist`. That directory is a static site: HTML, JavaScript, the compiler, and the packed sources. Any plain HTTP server can host it. The page includes a service worker that adds the cross-origin isolation headers WebAssembly needs, then reloads once. Servers that already send those headers skip the reload.

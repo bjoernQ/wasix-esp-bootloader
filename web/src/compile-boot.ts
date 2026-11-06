@@ -28,6 +28,8 @@ const sizes = ["1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"];
 const logs = ["NONE", "ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"];
 const logLevel: Record<string, number> = { none: 0, error: 1, warn: 2, info: 3, debug: 4, verbose: 5 };
 const ecdsaV2 = new Set(["esp32c2", "esp32c61"]);
+// ROM stores the verified image digest at the end of LP RAM. Kconfig reserves that many bytes only when secure boot is on.
+const romFastWake = new Set(["esp32c5", "esp32c6", "esp32h2", "esp32h21", "esp32s31"]);
 
 let client: WasmerClient | null = null;
 let compiler: Package | null = null;
@@ -76,13 +78,13 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
     await sandbox.fs.mkdir("/workspace/libs", { recursive: true });
     const objects = new Map<string, { member: string; data: Uint8Array }[]>();
     const direct: Uint8Array[] = [];
-    const common = recipe.common.map((flag) => flag === "-O0" && recipe.target.startsWith("xtensa") ? "-Os" : flag);
+    const common = recipe.common.map((flag) => flag === "-O0" || flag === "-O1" || flag === "-O2" || flag === "-Os" ? "-Oz" : flag);
     for (let index = 0; index < jobs.length; index += 1) {
       const job = jobs[index];
       log(`clang ${index + 1}/${jobs.length} ${job.src}`);
       const object = job.src.endsWith(".S") || job.src.endsWith(".s")
         ? await assemble(sandbox, ready, recipe.target, common, job.src, `/workspace/${job.out}`)
-        : await clang(sandbox, ready, [...common, "-c", `/workspace/${job.src}`, "-o", `/workspace/${job.out}`], job.src);
+        : await clang(sandbox, ready, [...common, "-c", `/workspace/${job.src}`, "-o", `/workspace/${job.out}`], job.src, log);
       if (job.lib) {
         const list = objects.get(job.lib) ?? [];
         list.push({ member: job.member, data: object });
@@ -109,6 +111,7 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
         ready,
         [...common, "-c", "/workspace/obj/signature_verification_key.c", "-o", "/workspace/obj/signature_verification_key.o"],
         "signature_verification_key.c",
+        log,
       ));
     }
     for (let index = 0; index < direct.length; index += 1) {
@@ -133,7 +136,7 @@ export async function compileIdfBootloader(options: BootOptions, log: (line: str
       "--end-group",
       "-o", "/workspace/bootloader.elf",
     ];
-    await link(sandbox, ready, linkArgs);
+    await link(sandbox, ready, linkArgs, log);
     const elf = await sandbox.fs.readFile("/workspace/bootloader.elf");
     assertDefined(elf, requiredSymbols(options));
     const securePad = options.secureBoot && options.chip !== "esp32";
@@ -213,6 +216,10 @@ function patchSecurity(text: string, options: BootOptions): string {
         text = setBool(text, "CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME", true);
         text = setBool(text, "CONFIG_SECURE_BOOT_V2_RSA_ENABLED", true);
       }
+    }
+    if (romFastWake.has(options.chip)) {
+      text = setDefine(text, "CONFIG_SECURE_BOOT_IMAGE_DIGEST_LEN", "32");
+      text = setDefine(text, "CONFIG_SECURE_BOOT_ROM_FAST_WAKE_RESERVE_SIZE", "32");
     }
   }
   if (options.encryption !== "off") {
@@ -377,7 +384,7 @@ async function assemble(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["c
   return sandbox.fs.readFile(out);
 }
 
-async function clang(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["create"]>>, pkg: Package, args: string[], label: string): Promise<Uint8Array> {
+async function clang(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["create"]>>, pkg: Package, args: string[], label: string, log: (line: string) => void): Promise<Uint8Array> {
   let retriedBackend = false;
   for (let attempt = 0; attempt < 12; attempt += 1) {
     let output;
@@ -394,10 +401,11 @@ async function clang(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["crea
     const text = `${output.stdout.text()}${output.stderr.text()}`;
     if (!output.ok && text.includes("error in backend") && !retriedBackend) {
       retriedBackend = true;
-      const fallback = args.filter((flag) => flag !== "-Os" && flag !== "-O2" && flag !== "-mllvm" && flag !== "-global-isel");
+      const fallback = args.filter((flag) => flag !== "-Oz" && flag !== "-Os" && flag !== "-O2" && flag !== "-mllvm" && flag !== "-global-isel");
       const at = fallback.indexOf("-c");
       fallback.splice(at, 0, "-O0");
       args.splice(0, args.length, ...fallback);
+      log(`${label} hit a compiler backend error, so this file was rebuilt at -O0`);
       continue;
     }
     const unknown = text.match(/unknown argument[: ]+'([^']+)'/);
@@ -415,8 +423,9 @@ async function clang(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["crea
   throw new Error(`${label}: too many unsupported compiler flags`);
 }
 
-async function link(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["create"]>>, pkg: Package, args: string[]): Promise<void> {
+async function link(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["create"]>>, pkg: Package, args: string[], log: (line: string) => void): Promise<void> {
   const defined = new Set<string>();
+  let grewLoader = false;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const extra = [...defined].flatMap((name) => ["--defsym", `${name}=0`]);
     const output = await sandbox.command(pkg.command("ld.lld"), [...args, ...extra]).run({
@@ -428,10 +437,66 @@ async function link(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["creat
     if (output.ok) return;
     const missing = [...message.matchAll(/symbol not found: (\S+)/g)].map((match) => match[1]);
     const added = missing.filter((name) => !defined.has(name));
-    if (!added.length) throw new Error(`link\n${tail(message)}`);
-    for (const name of added) defined.add(name);
+    if (added.length) {
+      for (const name of added) defined.add(name);
+      continue;
+    }
+    const overflow = message.match(/region 'iram_loader_seg': overflowed by (\d+) bytes/);
+    if (!grewLoader && overflow) {
+      const bytes = Number(overflow[1]);
+      const extraBytes = Math.ceil(bytes / 16) * 16;
+      if (await growLoader(sandbox, args, extraBytes)) {
+        grewLoader = true;
+        log(`iram_loader_seg was ${bytes} bytes short. Moved ${extraBytes} bytes from bootloader DRAM into the loader, leaving its start address unchanged.`);
+        continue;
+      }
+    }
+    throw new Error(`link\n${tail(message)}`);
   }
   throw new Error("link: too many undefined ROM symbols");
+}
+
+async function growLoader(sandbox: Awaited<ReturnType<WasmerClient["sandboxes"]["create"]>>, args: string[], extra: number): Promise<boolean> {
+  for (let index = 0; index < args.length - 1; index += 1) {
+    if (args[index] !== "-T") continue;
+    const path = args[index + 1];
+    if (!path) continue;
+    const source = new TextDecoder().decode(await sandbox.fs.readFile(path));
+    if (!source.includes("iram_loader_seg")) continue;
+    const next = resizeLoaderMemory(source, extra);
+    if (!next) continue;
+    await sandbox.fs.writeFile(path, text(next));
+    return true;
+  }
+  return false;
+}
+
+// The loader and bootloader DRAM are adjacent. Applications are linked up to the loader's start, so only the DRAM side can move.
+function resizeLoaderMemory(source: string, extra: number): string | null {
+  if (extra <= 0) return null;
+  const loaderLen = source.match(/^bootloader_iram_loader_seg_len = (0x[0-9a-fA-F]+);/m);
+  const dramLen = source.match(/^bootloader_dram_seg_len = (0x[0-9a-fA-F]+);/m);
+  if (loaderLen?.[1] && dramLen?.[1]) {
+    const loader = Number.parseInt(loaderLen[1], 16);
+    const dram = Number.parseInt(dramLen[1], 16);
+    if (dram - extra < 0x1000) return null;
+    return source
+      .replace(loaderLen[0], `bootloader_iram_loader_seg_len = 0x${(loader + extra).toString(16)};`)
+      .replace(dramLen[0], `bootloader_dram_seg_len = 0x${(dram - extra).toString(16)};`);
+  }
+  const loader = source.match(/iram_loader_seg\s*\(RWX\)\s*:\s*org\s*=\s*(0x[0-9a-fA-F]+)\s*,\s*len\s*=\s*(0x[0-9a-fA-F]+)/);
+  const dram = source.match(/dram_seg\s*\(RW\)\s*:\s*org\s*=\s*(0x[0-9a-fA-F]+)\s*,\s*len\s*=\s*(0x[0-9a-fA-F]+)/);
+  if (!loader?.[1] || !loader[2] || !dram?.[1] || !dram[2]) return null;
+  const loaderOrg = Number.parseInt(loader[1], 16);
+  const loaderLength = Number.parseInt(loader[2], 16);
+  const dramOrg = Number.parseInt(dram[1], 16);
+  const dramLength = Number.parseInt(dram[2], 16);
+  const loaderEnd = loaderOrg + loaderLength;
+  const adjacent = dramOrg === loaderEnd || dramOrg + 0x70000 === loaderEnd;
+  if (!adjacent || dramLength - extra < 0x1000) return null;
+  return source
+    .replace(loader[0], `iram_loader_seg (RWX) : org = 0x${loaderOrg.toString(16)}, len = 0x${(loaderLength + extra).toString(16)}`)
+    .replace(dram[0], `dram_seg (RW) : org = 0x${(dramOrg + extra).toString(16)}, len = 0x${(dramLength - extra).toString(16)}`);
 }
 
 function tail(text: string): string {
